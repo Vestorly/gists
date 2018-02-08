@@ -1,0 +1,243 @@
+defaults: &defaults
+  docker:
+    - image: circleci/node:8-browsers
+      environment:
+        JOBS: 2
+        BROCCOLI_PERSISTENT_FILTER_CACHE_ROOT: ~/labs/build_cache
+  working_directory: ~/labs
+  environment:
+    TZ: "/usr/share/zoneinfo/America/New_York"
+
+version: 2
+jobs:
+  checkout_code:
+    <<: *defaults
+    steps:
+      - checkout
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  install_dependencies:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - add_ssh_keys
+      - run:
+          name: Keyscan Github (HACK)
+          command: ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+      - restore_cache:
+          keys:
+            - v1-deps-{{ .Branch }}-{{ checksum "yarn.lock" }}
+            - v1-deps-{{ .Branch }}-
+            - v1-deps-
+      - run:
+          name: Install Global Dependencies
+          command: source install-global-dependencies.sh
+      - run: echo 'export PATH=~/labs/node_modules/.bin:~/.yarn/bin:~/.config/yarn/global/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Yarn Install
+          command: yarn install --pure-lockfile --non-interactive
+      - run:
+          name: Bower Install
+          command: bower install
+      - save-cache:
+          key: v1-deps-{{ .Branch }}-{{ checksum "yarn.lock" }}
+          paths:
+            - ./node_modules
+            - ./bower_components
+            - ~/.cache/yarn
+            - ~/.config/yarn
+            - ~/.yarn
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  build_test_code:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - restore-cache:
+          keys:
+            - v1-buildtest-{{ .Branch }}
+            - v1-buildtest-
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Build Test Package
+          command: ember build --environment=test --output-path="test-dist"
+      - save-cache:
+          key: v1-buildtest-{{ .Branch }}
+          paths:
+            - ./tmp
+            - ./build_cache
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  lint_js:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Run ESLint
+          command: yarn run eslint
+
+  run_tests_1:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Run Tests
+          command: JOBS=1 ember exam --split=4 --partition=1 --path="test-dist"
+
+  run_tests_2:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Run Tests
+          command: JOBS=1 ember exam --split=4 --partition=2 --path="test-dist"
+
+  run_tests_3:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Run Tests
+          command: JOBS=1 ember exam --split=4 --partition=3 --path="test-dist"
+
+  run_tests_4:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Run Tests
+          command: JOBS=1 ember exam --split=4 --partition=4 --path="test-dist"
+
+  deploy_development:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - add_ssh_keys
+      - run:
+          name: Keyscan Github (HACK)
+          command: ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+      - run: git config --global user.email "JohnDoe@users.noreply.github.com"
+      - run: git config --global user.name "John Doe"
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Deploy
+          command: ember deploy development
+      - run:
+          name: Generate Changelog
+          command: yarn run changelog
+
+  deploy_staging:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - add_ssh_keys
+      - run:
+          name: Keyscan Github (HACK)
+          command: ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+      - run: git config --global user.email "JohnDoe@users.noreply.github.com"
+      - run: git config --global user.name "John Doe"
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Deploy
+          command: ember deploy staging
+      - run:
+          name: Post Release Notes
+          command: curl --header "X-AUTH-SOMETHING-BLAH:$SOME_API_KEY" -X POST "https://some-server.some-where.com/github_release?repo=Vestorly/labs&branch=staging"
+
+
+  deploy_production:
+    <<: *defaults
+    steps:
+      - attach_workspace:
+          at: .
+      - add_ssh_keys
+      - run:
+          name: Keyscan Github (HACK)
+          command: ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+      - run: git config --global user.email "JohnDoe@users.noreply.github.com"
+      - run: git config --global user.name "John Doe"
+      - run: echo 'export PATH=~/labs/node_modules/.bin:$PATH' >> $BASH_ENV
+      - run:
+          name: Post Release Notes
+          command: curl --header "X-AUTH-SOMETHING-BLAH:$SOME_API_KEY" -X POST "https://some-server.some-where.com/github_release?repo=Vestorly/labs&branch=master"
+
+workflows:
+  version: 2
+  test_and_deploy:
+    jobs:
+      - checkout_code
+      - install_dependencies:
+          requires:
+            - checkout_code
+      - build_test_code:
+          requires:
+            - install_dependencies
+      - lint_js:
+          requires:
+            - build_test_code
+      - run_tests_1:
+          requires:
+            - build_test_code
+      - run_tests_2:
+          requires:
+            - build_test_code
+      - run_tests_3:
+          requires:
+            - build_test_code
+      - run_tests_4:
+          requires:
+            - build_test_code
+      - deploy_development:
+          requires:
+            - lint_js
+            - run_tests_1
+            - run_tests_2
+            - run_tests_3
+            - run_tests_4
+          filters:
+            branches:
+              only: development
+      - deploy_staging:
+          requires:
+            - lint_js
+            - run_tests_1
+            - run_tests_2
+            - run_tests_3
+            - run_tests_4
+          filters:
+            branches:
+              only: staging
+      - deploy_production:
+          requires:
+            - lint_js
+            - run_tests_1
+            - run_tests_2
+            - run_tests_3
+            - run_tests_4
+          filters:
+            branches:
+              only: production
+
+
